@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands
+from mcstatus import JavaServer
 from mcrcon import MCRcon
 import config
 import os
@@ -16,14 +17,24 @@ minecraft = client.create_group(name = "minecraft", guild = discord.Object(id = 
 
 @minecraft.command(name = "start", description = "start minecraft server", guild = discord.Object(id = config.guild_id))
 async def mc_start(ctx: discord.Interaction):
-    await ctx.response.send_message("server is started")
+    started = False
+    os.startfile(config.run_bat)
+    server = JavaServer.lookup(config.server_ip)
+    await ctx.response.send_message("server is starting")
+    while not started:
+        try:
+            status = server.status()
+            if status: 
+                started = True
+        except Exception: 
+            print("starting...")
+    await ctx.channel.send("server started")
     await client.change_presence(status = discord.Status.online)
     await client.change_presence(activity = discord.Game(name = f"server online"))
-    os.startfile(config.run_bat)
-    await asyncio.sleep(5)
-    line = 63
-    while True:
-        line = await console_reader(line)
+    file = io.open(config.console, mode = "r", encoding = "utf-8")
+    line = len(file.readlines()) - 1
+    while status:
+        line, status = await console_reader(line, server)
 
 @minecraft.command(name = "stop", description = "stop minecraft server", guild = discord.Object(id = config.guild_id))
 async def mc_stop(ctx: discord.Interaction):
@@ -50,17 +61,19 @@ async def fz_stop(ctx: discord.Interaction):
 async def on_message(message: discord.Message):
     if message.author != client.user and (message.channel.id == config.chat_channel_id or message.channel.id == config.console_channel_id):
         if len(f"<{message.author.name}> {message.content}") < 800 and len(message.content) > 0:
-            with MCRcon(config.rcon_ip, config.rcon_pass) as mcr:
-                if message.channel.id == config.chat_channel_id:
-                    mcr.command(f"tellraw @a [\"\",{{\"text\":\"<{message.author.name}>\",\"bold\":true,\"color\":\"#7289DA\",\"clickEvent\":{{\"action\":\"copy_to_clipboard\",\"value\":\"{message.author.name}#{message.author.discriminator}\"}},\"hoverEvent\":{{\"action\":\"show_text\",\"contents\":\"{message.author.name}#{message.author.discriminator}\"}}}},{{\"text\":\" {message.content}\"}}]")
-                if message.channel.id == config.console_channel_id:
-                    r = mcr.command(message.content)
-                    await message.reply(r)
-            mcr.disconnect()
+            try: 
+                with MCRcon(config.rcon_ip, config.rcon_pass) as mcr:
+                    if message.channel.id == config.chat_channel_id:
+                        mcr.command(f"tellraw @a [\"\",{{\"text\":\"<{message.author.name}>\",\"bold\":true,\"color\":\"#7289DA\",\"clickEvent\":{{\"action\":\"copy_to_clipboard\",\"value\":\"{message.author.name}#{message.author.discriminator}\"}},\"hoverEvent\":{{\"action\":\"show_text\",\"contents\":\"{message.author.name}#{message.author.discriminator}\"}}}},{{\"text\":\" {message.content}\"}}]")
+                    if message.channel.id == config.console_channel_id:
+                        await message.reply(mcr.command(message.content), mention_author = False)
+                mcr.disconnect()
+            except Exception:
+                pass
         else:
             await message.add_reaction('💀')
 
-async def console_reader(line):
+async def console_reader(line, server):
     chat_channel = client.get_channel(config.chat_channel_id)
     console_channel = client.get_channel(config.console_channel_id)
     file = io.open(config.console, mode = "r", encoding = "utf-8")
@@ -72,7 +85,11 @@ async def console_reader(line):
         else:
             await console_channel.send(line_list[line])
         line += 1
+    try:
+        status = server.status()
+    except Exception: 
+        status = None
     await asyncio.sleep(0)
-    return line
+    return line, status
 
 client.run(config.token)

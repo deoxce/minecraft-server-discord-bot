@@ -14,17 +14,19 @@ intents.message_content = True
 activity = discord.Game(name = "server offline")
 client = commands.Bot(intents = intents, activity = activity, status = discord.Status.idle)
 started = False
+last_panel:discord.Interaction = None
 
 @client.event
 async def on_ready():
-    view = await control_panel()
-    bot_channel = client.get_channel(config.bot_channel_id)
-    await bot_channel.send("control panel", view=view)
+    print("ready")
 
 @client.slash_command(name = "server", description = "server control panel", guild = discord.Object(id = config.guild_id))
 async def server(ctx: discord.Interaction):
+    global last_panel
+    if last_panel != None:
+        await last_panel.delete_original_response()
     view = await control_panel()
-    await ctx.response.send_message("control panel", view=view)
+    last_panel = await ctx.response.send_message("control panel", view=view)
 
 async def control_panel():
     view = View()
@@ -47,34 +49,42 @@ minecraft = client.create_group(name = "minecraft", guild = discord.Object(id = 
 @minecraft.command(name = "start", description = "start minecraft server", guild = discord.Object(id = config.guild_id))
 async def mc_start(ctx: discord.Interaction):
     global started
-    os.startfile(config.run_bat)
-    server = JavaServer.lookup(config.server_ip, timeout = 3)
-    await ctx.response.send_message("server is starting")
-    while not started:
-        try:
-            status = server.status()
-            if status: 
-                started = True
-        except Exception: 
-            print("starting..")
-    await ctx.channel.send("server started")
-    await client.change_presence(status = discord.Status.online)
-    await client.change_presence(activity = discord.Game(name = f"server online"))
-    file = io.open(config.console, mode = "r", encoding = "utf-8")
-    line = len(file.readlines()) - 1
-    while started:
-        line = await console_reader(line)
+    if not started:
+        os.startfile(config.run_bat)
+        server = JavaServer.lookup(config.server_ip, timeout = 3)
+        await ctx.response.send_message("server is starting")
+        while not started:
+            try:
+                status = server.status()
+                if status: 
+                    started = True
+            except Exception: 
+                print("starting..")
+        await ctx.followup.send("server started")
+        print("server started")
+        await client.change_presence(status = discord.Status.online)
+        await client.change_presence(activity = discord.Game(name = f"server online"))
+        file = io.open(config.console, mode = "r", encoding = "utf-8")
+        line = len(file.readlines()) - 1
+        while started:
+            line = await console_reader(line)
+    else:
+        await ctx.response.send_message("server is already running", ephemeral=True)
 
 @minecraft.command(name = "stop", description = "stop minecraft server", guild = discord.Object(id = config.guild_id))
 async def mc_stop(ctx: discord.Interaction):
     global started
     await client.change_presence(status = discord.Status.idle)
     await client.change_presence(activity = discord.Game(name = f"server offline"))
-    with MCRcon(config.rcon_ip, config.rcon_pass) as mcr:
-        mcr.command('stop')
-        mcr.disconnect()
-        started = False
-        await ctx.response.send_message("server stopped")
+    try:
+        with MCRcon(config.rcon_ip, config.rcon_pass) as mcr:
+            mcr.command('stop')
+            mcr.disconnect()
+            started = False
+            await ctx.response.send_message("server stopped")
+            print("server stopped")
+    except Exception:
+        await ctx.response.send_message("server is already stopped", ephemeral=True)
 
 @minecraft.command(name = "status", description = "server status", guild = discord.Object(id = 1064616038383231047))
 async def mc_status(ctx: discord.Interaction, ip: str = config.server_ip):
@@ -83,7 +93,8 @@ async def mc_status(ctx: discord.Interaction, ip: str = config.server_ip):
     server = JavaServer.lookup(ip, timeout = 1)
     try:
         status = server.status()
-        await ctx.response.send_message(f"ip: {ip}\nversion: {status.version.name}\ndescription: {status.description}\nplayers: {status.players.online}")
+        query = server.query()
+        await ctx.response.send_message(f"ip: {ip}\nversion: {status.version.name}\ndescription: {status.description}\nplayers: {status.players.online}\n{', '.join(query.players.names)}")
     except Exception:
         await ctx.response.send_message(f"server {ip} offline")
 
@@ -106,6 +117,7 @@ async def on_message(message: discord.Message):
                             resp = "server stopped"
                             started = False
                         await message.reply(resp, mention_author = False)
+                        print("server stopped")
                 mcr.disconnect()
             except Exception:
                 pass
@@ -124,6 +136,7 @@ async def console_reader(line):
             await console_channel.send(line_list[line])
             message = await console_channel.fetch_message(console_channel.last_message_id)
             await message.reply("server stopped")
+            print("server stopped")
             break
         nickname = re.search(r"<(.+?)>", line_list[line])
         if nickname != None:

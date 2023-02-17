@@ -1,4 +1,5 @@
 import discord
+from discord.ui import Button, View
 from discord.ext import commands
 from mcstatus import JavaServer
 from mcrcon import MCRcon
@@ -13,6 +14,33 @@ intents.message_content = True
 activity = discord.Game(name = "server offline")
 client = commands.Bot(intents = intents, activity = activity, status = discord.Status.idle)
 started = False
+
+@client.event
+async def on_ready():
+    view = await control_panel()
+    bot_channel = client.get_channel(config.bot_channel_id)
+    await bot_channel.send("control panel", view=view)
+
+@client.slash_command(name = "server", description = "server control panel", guild = discord.Object(id = config.guild_id))
+async def server(ctx: discord.Interaction):
+    view = await control_panel()
+    await ctx.response.send_message("control panel", view=view)
+
+async def control_panel():
+    view = View()
+    button_start = Button(label="start", style=discord.ButtonStyle.green)
+    button_stop = Button(label="stop", style=discord.ButtonStyle.red)
+    button_status = Button(label="status", style=discord.ButtonStyle.blurple)
+    button_render = Button(label="render", style=discord.ButtonStyle.blurple)
+    button_start.callback = mc_start
+    button_stop.callback = mc_stop
+    button_status.callback = mc_status
+    button_render.callback = mc_render
+    view.add_item(button_start)
+    view.add_item(button_stop)
+    view.add_item(button_status)
+    view.add_item(button_render)
+    return view
 
 minecraft = client.create_group(name = "minecraft", guild = discord.Object(id = config.guild_id))
 
@@ -48,17 +76,20 @@ async def mc_stop(ctx: discord.Interaction):
         started = False
         await ctx.response.send_message("server stopped")
 
-filezilla = client.create_group(name = "filezilla", guild = discord.Object(id = config.guild_id))
+@minecraft.command(name = "status", description = "server status", guild = discord.Object(id = 1064616038383231047))
+async def mc_status(ctx: discord.Interaction, ip: str = config.server_ip):
+    if ip.find(":") == -1:
+        ip += ":25565"
+    server = JavaServer.lookup(ip, timeout = 1)
+    try:
+        status = server.status()
+        await ctx.response.send_message(f"ip: {ip}\nversion: {status.version.name}\ndescription: {status.description}\nplayers: {status.players.online}")
+    except Exception:
+        await ctx.response.send_message(f"server {ip} offline")
 
-@filezilla.command(name = "start", description = "start FTP server", guild = discord.Object(id = config.guild_id))
-async def fz_start(ctx: discord.Interaction):
-    await ctx.response.send_message("FTP server is started")
-    os.startfile(config.ftp_start)
-
-@filezilla.command(name = "stop", description = "stop FTP server", guild = discord.Object(id = config.guild_id))
-async def fz_stop(ctx: discord.Interaction):
-    await ctx.response.send_message("FTP server stopped")
-    os.startfile(config.ftp_stop)
+@minecraft.command(name = "render", description = "render server map", guild = discord.Object(id = 1064616038383231047))
+async def mc_render(ctx: discord.Interaction):
+    await ctx.response.send_message("in developing")
 
 @client.event
 async def on_message(message: discord.Message):

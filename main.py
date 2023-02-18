@@ -15,6 +15,8 @@ activity = discord.Game(name="server offline")
 client = commands.Bot(intents=intents, activity=activity, status=discord.Status.idle)
 started = False
 panel: discord.Interaction = None
+start_button_state = True
+stop_button_state = False
 
 @client.event
 async def on_ready():
@@ -22,16 +24,16 @@ async def on_ready():
 
 @client.slash_command(name="server", description="server control panel", guild=discord.Object(id=config.guild_id))
 async def server(ctx: discord.Interaction):
-    global panel
+    global panel, start_button_state, stop_button_state
     if panel is not None:
         await panel.delete_original_response()
-    view = await control_panel()
+    view = await control_panel(start_button_state, stop_button_state)
     panel = await ctx.response.send_message("control panel", view=view)
 
-async def control_panel():
+async def control_panel(start_button_state, stop_button_state):
     view = View()
-    button_start = Button(label="start", style=discord.ButtonStyle.green)
-    button_stop = Button(label="stop", style=discord.ButtonStyle.red)
+    button_start = Button(label="start", style=discord.ButtonStyle.green, disabled=not start_button_state)
+    button_stop = Button(label="stop", style=discord.ButtonStyle.red, disabled=not stop_button_state)
     button_status = Button(label="status", style=discord.ButtonStyle.blurple)
     button_render = Button(label="render", style=discord.ButtonStyle.blurple)
     button_start.callback = mc_start
@@ -48,10 +50,14 @@ minecraft = client.create_group(name="minecraft", guild=discord.Object(id=config
 
 @minecraft.command(name="start", description="start minecraft server", guild=discord.Object(id=config.guild_id))
 async def mc_start(ctx: discord.Interaction):
-    global started
+    global started, panel, start_button_state, stop_button_state
     if not started:
         os.startfile(config.run_bat)
         server = JavaServer.lookup(config.server_ip)
+        start_button_state = False
+        if panel is not None:
+            view = await control_panel(start_button_state, stop_button_state)
+            await panel.edit_original_response(view=view)
         await ctx.response.send_message("server is starting")
         while not started:
             try:
@@ -62,6 +68,10 @@ async def mc_start(ctx: discord.Interaction):
                 print("starting..")
         await ctx.channel.send("server started")
         print("server started")
+        stop_button_state = True
+        if panel is not None:
+            view = await control_panel(start_button_state, stop_button_state)
+            await panel.edit_original_response(view=view)
         await client.change_presence(status=discord.Status.online)
         await client.change_presence(activity=discord.Game(name="server online"))
         file = io.open(config.console, mode="r", encoding="utf-8")
@@ -79,8 +89,13 @@ async def mc_stop(ctx: discord.Interaction):
         with MCRcon(config.rcon_ip, config.rcon_pass) as mcr:
             mcr.command("stop")
             mcr.disconnect()
-            global started
+            global started, panel, start_button_state, stop_button_state
             started = False
+            start_button_state = True
+            stop_button_state = False
+            if panel is not None:
+                view = await control_panel(start_button_state, stop_button_state)
+                await panel.edit_original_response(view=view)
             await ctx.response.send_message("server stopped")
             print("server stopped")
     except Exception:

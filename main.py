@@ -58,7 +58,7 @@ async def mc_start(ctx: discord.Interaction):
                 status = server.status()
                 if status:
                     started = True
-            except Exception: 
+            except Exception:
                 print("starting..")
         await ctx.channel.send("server started")
         print("server started")
@@ -90,16 +90,20 @@ async def mc_stop(ctx: discord.Interaction):
 async def mc_status(ctx: discord.Interaction, ip: str = config.server_ip):
     if ip.find(":") == -1:
         ip += ":25565"
-    server = JavaServer.lookup(ip)
+    server = JavaServer.lookup(ip, timeout=2)
+    server_online = False
     try:
         status = server.status()
-        try:
-            query = server.query()
-            await ctx.response.send_message(f"ip: {ip}\nversion: {status.version.name}\ndescription: {status.description}\nplayers: {status.players.online}\n{', '.join(query.players.names)}")
-        except Exception:
-            await ctx.response.send_message(f"ip: {ip}\nversion: {status.version.name}\ndescription: {status.description}\nplayers: {status.players.online}")
+        server_online = True
+        await ctx.response.send_message(f"**ip:** {ip}\n**version:** {status.version.name}\n**description:** {status.description}\n**number of players:** {status.players.online}/{status.players.max}")
     except Exception:
         await ctx.response.send_message(f"server {ip} offline")
+    if server_online:
+        try:
+            query = server.query()
+            await ctx.channel.send(f"**map: **{query.map}\n**brand: **{query.software.brand}\n**plugins: **{', '.join(query.software.plugins)}\n**players list: **{', '.join(query.players.names)}")
+        except Exception:
+            pass
 
 @minecraft.command(name="render", description="render server map", guild=discord.Object(id=config.guild_id))
 async def mc_render(ctx: discord.Interaction):

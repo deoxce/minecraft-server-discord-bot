@@ -15,6 +15,8 @@ activity = discord.Game(name="server offline")
 client = commands.Bot(intents=intents, activity=activity, status=discord.Status.idle)
 started = False
 panel: discord.Interaction = None
+control_panel_id = None
+view = None
 
 @client.event
 async def on_ready():
@@ -25,34 +27,46 @@ async def server(ctx: discord.Interaction):
     global panel
     if panel is not None:
         await panel.delete_original_response()
-    view = await control_panel()
+    global view
+    if view == None:
+        view = Menu()
     panel = await ctx.response.send_message("control panel", view=view)
+    current_channel = client.get_channel(ctx.channel_id)
+    global control_panel_id
+    control_panel_id = current_channel.last_message_id
 
-async def control_panel():
-    view = View()
-    button_start = Button(label="start", style=discord.ButtonStyle.green)
-    button_stop = Button(label="stop", style=discord.ButtonStyle.red)
-    button_status = Button(label="status", style=discord.ButtonStyle.blurple)
-    button_render = Button(label="render", style=discord.ButtonStyle.blurple)
-    button_start.callback = mc_start
-    button_stop.callback = mc_stop
-    button_status.callback = mc_status
-    button_render.callback = mc_render
-    view.add_item(button_start)
-    view.add_item(button_stop)
-    view.add_item(button_status)
-    view.add_item(button_render)
-    return view
+class Menu(View):
+    @discord.ui.button(label="start", style=discord.ButtonStyle.green, disabled=False, custom_id="start_button")
+    async def start_button_callback(self, button: discord.ui.Button, ctx: discord.Interaction):
+        stop_button = [x for x in self.children if x.custom_id == "stop_button"][0]
+        button.disabled = True
+        await ctx.response.edit_message(view=self)
+        await mc_start(ctx, stop_button, self)
+
+    @discord.ui.button(label="stop", style=discord.ButtonStyle.red, disabled=True, custom_id="stop_button")
+    async def stop_button_callback(self, button: discord.ui.Button, ctx: discord.Interaction):
+        start_button = [x for x in self.children if x.custom_id == "start_button"][0]
+        button.disabled = True
+        await ctx.response.edit_message(view=self)
+        await mc_stop(ctx, start_button, self)
+
+    @discord.ui.button(label="status", style=discord.ButtonStyle.blurple)
+    async def status_button_callback(self, button: discord.ui.Button, ctx: discord.Interaction):
+        await mc_status(ctx)
+
+    @discord.ui.button(label="render", style=discord.ButtonStyle.blurple)
+    async def render_button_callback(self, button: discord.ui.Button, ctx: discord.Interaction):
+        await mc_render(ctx)
 
 minecraft = client.create_group(name="minecraft", guild=discord.Object(id=config.guild_id))
 
-@minecraft.command(name="start", description="start minecraft server", guild=discord.Object(id=config.guild_id))
-async def mc_start(ctx: discord.Interaction):
+#@minecraft.command(name="start", description="start minecraft server", guild=discord.Object(id=config.guild_id))
+async def mc_start(ctx: discord.Interaction, stop_button, self):
     global started
     if not started:
         os.startfile(config.run_bat)
         server = JavaServer.lookup(config.server_ip)
-        await ctx.response.send_message("server is starting")
+        await ctx.followup.send("server is starting")
         while not started:
             try:
                 status = server.status()
@@ -62,6 +76,10 @@ async def mc_start(ctx: discord.Interaction):
                 print("starting..")
         await ctx.channel.send("server started")
         print("server started")
+        stop_button.disabled = False
+        global view
+        view = self
+        await ctx.followup.edit_message(control_panel_id, view=self)
         await client.change_presence(status=discord.Status.online)
         await client.change_presence(activity=discord.Game(name="server online"))
         file = io.open(config.console, mode="r", encoding="utf-8")
@@ -71,8 +89,8 @@ async def mc_start(ctx: discord.Interaction):
     else:
         await ctx.response.send_message("server is already running", ephemeral=True)
 
-@minecraft.command(name="stop", description="stop minecraft server", guild=discord.Object(id=config.guild_id))
-async def mc_stop(ctx: discord.Interaction):
+#@minecraft.command(name="stop", description="stop minecraft server", guild=discord.Object(id=config.guild_id))
+async def mc_stop(ctx: discord.Interaction, start_button, self):
     await client.change_presence(status=discord.Status.idle)
     await client.change_presence(activity=discord.Game(name="server offline"))
     try:
@@ -81,8 +99,12 @@ async def mc_stop(ctx: discord.Interaction):
             mcr.disconnect()
             global started
             started = False
-            await ctx.response.send_message("server stopped")
+            await ctx.followup.send("server stopped")
             print("server stopped")
+            start_button.disabled = False
+            global view
+            view = self
+            await ctx.followup.edit_message(control_panel_id, view=self)
     except Exception:
         await ctx.response.send_message("server is already stopped", ephemeral=True)
 
@@ -90,7 +112,7 @@ async def mc_stop(ctx: discord.Interaction):
 async def mc_status(ctx: discord.Interaction, ip: str = config.server_ip):
     if ip.find(":") == -1:
         ip += ":25565"
-    server = JavaServer.lookup(ip, timeout=2)
+    server = JavaServer.lookup(ip, timeout=1)
     server_online = False
     try:
         status = server.status()

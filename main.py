@@ -14,9 +14,10 @@ intents.message_content = True
 activity = discord.Game(name="server offline")
 client = commands.Bot(intents=intents, activity=activity, status=discord.Status.idle)
 started = False
-panel: discord.Interaction = None
 start_button_state = True
 stop_button_state = False
+panel: discord.Interaction = None
+panel_message: discord.Message = None
 
 @client.event
 async def on_ready():
@@ -24,14 +25,15 @@ async def on_ready():
 
 @client.slash_command(name="server", description="server control panel", guild=discord.Object(id=config.guild_id))
 async def server(ctx: discord.Interaction):
-    global panel, start_button_state, stop_button_state
+    global panel, start_button_state, stop_button_state, panel_message
     if panel is not None:
-        await panel.delete_original_response()
+        await panel_message.delete()
     view = await control_panel(start_button_state, stop_button_state)
     panel = await ctx.response.send_message("control panel", view=view)
+    panel_message = await panel.channel.fetch_message(panel.channel.last_message_id)
 
 async def control_panel(start_button_state, stop_button_state):
-    view = View()
+    view = View(timeout=None)
     button_start = Button(label="start", style=discord.ButtonStyle.green, disabled=not start_button_state)
     button_stop = Button(label="stop", style=discord.ButtonStyle.red, disabled=not stop_button_state)
     button_status = Button(label="status", style=discord.ButtonStyle.blurple)
@@ -52,9 +54,9 @@ minecraft = client.create_group(name="minecraft", guild=discord.Object(id=config
 async def mc_start(ctx: discord.Interaction):
     global started, panel, start_button_state, stop_button_state
     if not started:
+        start_button_state = False
         os.startfile(config.run_bat)
         server = JavaServer.lookup(config.server_ip)
-        start_button_state = False
         if panel is not None:
             view = await control_panel(start_button_state, stop_button_state)
             await panel.edit_original_response(view=view)
@@ -89,6 +91,8 @@ async def mc_stop(ctx: discord.Interaction):
         with MCRcon(config.rcon_ip, config.rcon_pass) as mcr:
             mcr.command("stop")
             mcr.disconnect()
+            await ctx.response.send_message("server stopped")
+            print("server stopped")
             global started, panel, start_button_state, stop_button_state
             started = False
             start_button_state = True
@@ -96,8 +100,6 @@ async def mc_stop(ctx: discord.Interaction):
             if panel is not None:
                 view = await control_panel(start_button_state, stop_button_state)
                 await panel.edit_original_response(view=view)
-            await ctx.response.send_message("server stopped")
-            print("server stopped")
     except Exception:
         await ctx.response.send_message("server is already stopped", ephemeral=True)
 
@@ -140,9 +142,14 @@ async def on_message(message: discord.Message):
                     resp = mcr.command(message.content)
                     if resp == "Stopping the server":
                         resp = "server stopped"
-                        global started
-                        started = False
                         print("server stopped")
+                        global started, panel, start_button_state, stop_button_state
+                        started = False
+                        start_button_state = True
+                        stop_button_state = False
+                        if panel is not None:
+                            view = await control_panel(start_button_state, stop_button_state)
+                            await panel.edit_original_response(view=view)
                     await message.reply(resp, mention_author=False)
                 mcr.disconnect()
             else:
@@ -155,12 +162,17 @@ async def console_reader(line):
     line_list = file.readlines()
     while line < len(line_list):
         if re.match(r"\[[0-9][0-9]:[0-9][0-9]:[0-9][0-9] INFO\]: (.+?) issued server command: /stop", line_list[line]):
-            global started
-            started = False
             await console_channel.send(line_list[line])
             message = await console_channel.fetch_message(console_channel.last_message_id)
             await message.reply("server stopped")
             print("server stopped")
+            global started, panel, start_button_state, stop_button_state
+            started = False
+            start_button_state = True
+            stop_button_state = False
+            if panel is not None:
+                view = await control_panel(start_button_state, stop_button_state)
+                await panel.edit_original_response(view=view)
             break
         nickname = re.search(r"<(.+?)>", line_list[line])
         if nickname is not None:

@@ -18,6 +18,7 @@ start_button_state = True
 stop_button_state = False
 panel: discord.Interaction = None
 panel_message: discord.Message = None
+console_output = False
 
 @client.event
 async def on_ready():
@@ -52,14 +53,14 @@ minecraft = client.create_group(name="minecraft", guild=discord.Object(id=config
 
 @minecraft.command(name="start", description="start minecraft server", guild=discord.Object(id=config.guild_id))
 async def mc_start(ctx: discord.Interaction):
-    global started, panel, start_button_state, stop_button_state
+    global started, panel, start_button_state, stop_button_state, panel_message, console_output
     if not started:
         start_button_state = False
         os.startfile(config.run_bat)
         server = JavaServer.lookup(config.server_ip)
         if panel is not None:
             view = await control_panel(start_button_state, stop_button_state)
-            await panel.edit_original_response(view=view)
+            await panel_message.edit(view=view)
         await ctx.response.send_message("server is starting")
         while not started:
             try:
@@ -73,11 +74,12 @@ async def mc_start(ctx: discord.Interaction):
         stop_button_state = True
         if panel is not None:
             view = await control_panel(start_button_state, stop_button_state)
-            await panel.edit_original_response(view=view)
+            await panel_message.edit(view=view)
         await client.change_presence(status=discord.Status.online)
         await client.change_presence(activity=discord.Game(name="server online"))
         file = io.open(config.console, mode="r", encoding="utf-8")
         line = len(file.readlines()) - 1
+        console_output = True
         while started:
             line = await console_reader(line)
     else:
@@ -89,17 +91,16 @@ async def mc_stop(ctx: discord.Interaction):
     await client.change_presence(activity=discord.Game(name="server offline"))
     try:
         with MCRcon(config.rcon_ip, config.rcon_pass) as mcr:
-            mcr.command("stop")
-            mcr.disconnect()
-            await ctx.response.send_message("server stopped")
-            print("server stopped")
-            global started, panel, start_button_state, stop_button_state
-            started = False
-            start_button_state = True
+            global started, panel, start_button_state, stop_button_state, panel_message, console_output
+            console_output = False
             stop_button_state = False
             if panel is not None:
                 view = await control_panel(start_button_state, stop_button_state)
-                await panel.edit_original_response(view=view)
+                await panel_message.edit(view=view)
+            mcr.command("stop")
+            mcr.disconnect()
+            await ctx.response.send_message("server is stopping")
+            print("server is stopping")
     except Exception:
         await ctx.response.send_message("server is already stopped", ephemeral=True)
 
@@ -141,44 +142,51 @@ async def on_message(message: discord.Message):
                 with MCRcon(config.rcon_ip, config.rcon_pass) as mcr:
                     resp = mcr.command(message.content)
                     if resp == "Stopping the server":
-                        resp = "server stopped"
-                        print("server stopped")
-                        global started, panel, start_button_state, stop_button_state
-                        started = False
-                        start_button_state = True
+                        global started, panel, start_button_state, stop_button_state, panel_message, console_output
+                        console_output = False
                         stop_button_state = False
                         if panel is not None:
                             view = await control_panel(start_button_state, stop_button_state)
-                            await panel.edit_original_response(view=view)
+                            await panel_message.edit(view=view)
+                        resp = "server is stopping"
+                        print("server is stopping")
                     await message.reply(resp, mention_author=False)
                 mcr.disconnect()
             else:
                 await message.add_reaction("💀")
 
 async def console_reader(line):
+    global started, panel, start_button_state, stop_button_state, panel_message, console_output
     chat_channel = client.get_channel(config.chat_channel_id)
     console_channel = client.get_channel(config.console_channel_id)
     file = io.open(config.console, mode="r", encoding="utf-8")
     line_list = file.readlines()
     while line < len(line_list):
         if re.match(r"\[[0-9][0-9]:[0-9][0-9]:[0-9][0-9] INFO\]: (.+?) issued server command: /stop", line_list[line]):
-            await console_channel.send(line_list[line])
-            message = await console_channel.fetch_message(console_channel.last_message_id)
-            await message.reply("server stopped")
-            print("server stopped")
-            global started, panel, start_button_state, stop_button_state
-            started = False
-            start_button_state = True
+            console_output = False
             stop_button_state = False
             if panel is not None:
                 view = await control_panel(start_button_state, stop_button_state)
-                await panel.edit_original_response(view=view)
-            break
-        nickname = re.search(r"<(.+?)>", line_list[line])
-        if nickname is not None:
-            await chat_channel.send(f"**{nickname.group(1)}**:{line_list[line][line_list[line].find('>') + 1:]}")
-        else:
+                await panel_message.edit(view=view)
             await console_channel.send(line_list[line])
+            message = await console_channel.fetch_message(console_channel.last_message_id)
+            await message.reply("server is stopping")
+            print("server is stopping") 
+        if re.match(r"\[[0-9][0-9]:[0-9][0-9]:[0-9][0-9] INFO\]: Closing Server", line_list[line]):
+            await panel.channel.send("server stopped")
+            print("server stopped") 
+            started = False
+            start_button_state = True
+            if panel is not None:
+                view = await control_panel(start_button_state, stop_button_state)
+                await panel_message.edit(view=view)
+            break
+        if console_output:
+            nickname = re.search(r"<(.+?)>", line_list[line])
+            if nickname is not None:
+                await chat_channel.send(f"**{nickname.group(1)}**:{line_list[line][line_list[line].find('>') + 1:]}")
+            else:
+                await console_channel.send(line_list[line])
         line += 1
     await asyncio.sleep(0)
     return line

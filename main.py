@@ -20,6 +20,7 @@ panel: discord.Interaction = None
 panel_message: discord.Message = None
 console_output = False
 global_interaction: discord.Interaction = None
+stop_already_called = False
 
 @client.event
 async def on_ready():
@@ -39,11 +40,14 @@ async def control_panel(start_button_state, stop_button_state):
     button_start = Button(label="start", style=discord.ButtonStyle.green, disabled=not start_button_state)
     button_stop = Button(label="stop", style=discord.ButtonStyle.red, disabled=not stop_button_state)
     button_status = Button(label="status", style=discord.ButtonStyle.blurple)
-    button_render = Button(label="render", style=discord.ButtonStyle.blurple)
+    if config.dynmap:
+        button_render = Button(label="render", style=discord.ButtonStyle.blurple, url=f'http://{config.server_ip}:{config.dynmap_port}')
+    else:
+        button_render = Button(label="render", style=discord.ButtonStyle.blurple)
+        button_render.callback = mc_render
     button_start.callback = mc_start
     button_stop.callback = mc_stop
     button_status.callback = mc_status
-    button_render.callback = mc_render
     view.add_item(button_start)
     view.add_item(button_stop)
     view.add_item(button_status)
@@ -58,10 +62,11 @@ async def mc_start(ctx: discord.Interaction):
     if not started:
         start_button_state = False
         os.startfile(config.run_bat)
-        server = JavaServer.lookup(config.server_ip)
+        server = JavaServer.lookup(f"{config.server_ip}:{config.server_port}")
         if panel is not None:
             view = await control_panel(start_button_state, stop_button_state)
             await panel_message.edit(view=view)
+        print("server is starting")
         await ctx.response.defer(ephemeral=False, invisible=False)
         while not started:
             try:
@@ -88,26 +93,29 @@ async def mc_start(ctx: discord.Interaction):
 
 @minecraft.command(name="stop", description="stop minecraft server", guild=discord.Object(id=config.guild_id))
 async def mc_stop(ctx: discord.Interaction):
+    global stop_already_called
     await client.change_presence(status=discord.Status.idle)
     await client.change_presence(activity=discord.Game(name="server offline"))
-    try:
-        with MCRcon(config.rcon_ip, config.rcon_pass) as mcr:
-            global started, panel, start_button_state, stop_button_state, panel_message, console_output, global_interaction
-            console_output = False
-            stop_button_state = False
-            if panel is not None:
-                view = await control_panel(start_button_state, stop_button_state)
-                await panel_message.edit(view=view)
-            mcr.command("stop")
-            mcr.disconnect()
-            global_interaction = ctx
-            await ctx.response.defer(ephemeral=False, invisible=False)
-            print("server is stopping")
-    except Exception:
-        await ctx.response.send_message("server is already stopped", ephemeral=True)
+    if not stop_already_called:
+        try:
+            with MCRcon(config.server_ip, config.rcon_pass) as mcr:
+                global started, panel, start_button_state, stop_button_state, panel_message, console_output, global_interaction
+                console_output = False
+                stop_button_state = False
+                stop_already_called = True
+                if panel is not None:
+                    view = await control_panel(start_button_state, stop_button_state)
+                    await panel_message.edit(view=view)
+                mcr.command("stop")
+                mcr.disconnect()
+                global_interaction = ctx
+                await ctx.response.defer(ephemeral=False, invisible=False)
+                print("server is stopping")
+        except Exception:
+            await ctx.response.send_message("server is already stopped", ephemeral=True)
 
 @minecraft.command(name="status", description="server status", guild=discord.Object(id=config.guild_id))
-async def mc_status(ctx: discord.Interaction, ip: str = config.server_ip):
+async def mc_status(ctx: discord.Interaction, ip: str = f"{config.server_ip}:{config.server_port}"):
     if ip.find(":") == -1:
         ip += ":25565"
     server = JavaServer.lookup(ip, timeout=2)
@@ -127,21 +135,24 @@ async def mc_status(ctx: discord.Interaction, ip: str = config.server_ip):
 
 @minecraft.command(name="render", description="render server map", guild=discord.Object(id=config.guild_id))
 async def mc_render(ctx: discord.Interaction):
-    await ctx.response.send_message("in developing")
+    if config.dynmap:
+        await ctx.response.send_message(f'http://{config.server_ip}:{config.dynmap_port}')
+    else:
+        await ctx.response.send_message("in developing")
 
 @client.event
 async def on_message(message: discord.Message):
     if message.author != client.user:
         if message.channel.id == config.chat_channel_id:
             if len(f"<{message.author.name}> {message.content}") < 800 and len(message.content) > 0:
-                with MCRcon(config.rcon_ip, config.rcon_pass) as mcr:
+                with MCRcon(config.server_ip, config.rcon_pass) as mcr:
                     mcr.command(f"tellraw @a [\"\",{{\"text\":\"<{message.author.name}>\",\"bold\":true,\"color\":\"#7289DA\",\"clickEvent\":{{\"action\":\"copy_to_clipboard\",\"value\":\"{message.author.name}#{message.author.discriminator}\"}},\"hoverEvent\":{{\"action\":\"show_text\",\"contents\":\"{message.author.name}#{message.author.discriminator}\"}}}},{{\"text\":\" {message.content}\"}}]")
                 mcr.disconnect()
             else:
                 await message.add_reaction("💀")
         if message.channel.id == config.console_channel_id:
             if 0 < len(message.content) < 256:
-                with MCRcon(config.rcon_ip, config.rcon_pass) as mcr:
+                with MCRcon(config.server_ip, config.rcon_pass) as mcr:
                     resp = mcr.command(message.content)
                     if resp == "Stopping the server":
                         global started, panel, start_button_state, stop_button_state, panel_message, console_output
@@ -158,7 +169,7 @@ async def on_message(message: discord.Message):
                 await message.add_reaction("💀")
 
 async def console_reader(line):
-    global started, panel, start_button_state, stop_button_state, panel_message, console_output, global_interaction
+    global started, panel, start_button_state, stop_button_state, panel_message, console_output, global_interaction, stop_already_called
     chat_channel = client.get_channel(config.chat_channel_id)
     console_channel = client.get_channel(config.console_channel_id)
     file = io.open(config.console, mode="r", encoding="utf-8")
@@ -177,6 +188,7 @@ async def console_reader(line):
         if re.match(r"\[[0-9][0-9]:[0-9][0-9]:[0-9][0-9] INFO\]: Closing Server", line_list[line]):
             await global_interaction.followup.send("server stopped")
             print("server stopped") 
+            stop_already_called = False
             started = False
             start_button_state = True
             if panel is not None:

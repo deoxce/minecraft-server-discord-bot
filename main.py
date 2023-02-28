@@ -3,6 +3,7 @@ from discord.ui import Button, View
 from discord.ext import commands
 from mcstatus import JavaServer
 from mcrcon import MCRcon
+from datetime import datetime
 import config
 import os
 import asyncio
@@ -23,9 +24,16 @@ global_interaction: discord.Interaction = None
 stop_already_called = False
 nickname = None
 find_stop = False
+console_thread: discord.Thread = None
+start_time = None
 
 @client.event
 async def on_ready():
+    global panel, start_button_state, stop_button_state, panel_message
+    await client.get_channel(config.console_channel_id).purge(limit=100)
+    view = await control_panel(start_button_state, stop_button_state)
+    panel = await client.get_channel(config.console_channel_id).send("control panel", view=view)
+    panel_message = panel
     print("ready")
 
 async def control_panel(start_button_state, stop_button_state):
@@ -62,7 +70,7 @@ async def server(ctx: discord.Interaction):
 
 @server_group.command(name="start", description="start minecraft server", guild=discord.Object(id=config.guild_id))
 async def mc_start(ctx: discord.Interaction):
-    global started, panel, start_button_state, stop_button_state, panel_message, console_output
+    global started, panel, start_button_state, stop_button_state, panel_message, console_output, console_thread, start_time
     if not started:
         start_button_state = False
         os.startfile(config.run_bat)
@@ -70,6 +78,11 @@ async def mc_start(ctx: discord.Interaction):
         if panel is not None:
             view = await control_panel(start_button_state, stop_button_state)
             await panel_message.edit(view=view)
+        if panel_message.thread:
+            view = await control_panel(start_button_state, stop_button_state)
+            panel = await panel_message.channel.send("control panel", view=view)
+            await panel_message.delete()
+            panel_message = panel
         print("server is starting")
         await ctx.response.defer(ephemeral=False, invisible=False)
         while not started:
@@ -80,7 +93,9 @@ async def mc_start(ctx: discord.Interaction):
                     started = True
             except Exception:
                 print("starting..")
-        await ctx.followup.send("server started")
+        await ctx.delete_original_response()
+        start_time = datetime.now()
+        console_thread = await panel_message.create_thread(name="console")
         print("server started")
         stop_button_state = True
         if panel is not None:
@@ -91,7 +106,7 @@ async def mc_start(ctx: discord.Interaction):
         line = len(file.readlines()) - 1
         console_output = True
         while started:
-            line = await console_reader(line)
+            line = await console_reader(line, console_thread)
     else:
         await ctx.response.send_message("server is already running", ephemeral=True)
 
@@ -102,7 +117,7 @@ async def mc_stop(ctx: discord.Interaction):
     if not stop_already_called:
         try:
             with MCRcon(config.server_ip, config.rcon_pass) as mcr:
-                global started, panel, start_button_state, stop_button_state, panel_message, console_output, global_interaction
+                global started, panel, start_button_state, stop_button_state, panel_message, console_output, global_interaction, console_thread, start_time
                 console_output = False
                 stop_button_state = False
                 stop_already_called = True
@@ -111,7 +126,10 @@ async def mc_stop(ctx: discord.Interaction):
                     await panel_message.edit(view=view)
                 mcr.command("stop")
                 mcr.disconnect()
-                global_interaction = ctx
+                print(ctx)
+                if ctx.channel_id == config.console_channel_id:
+                    global_interaction = ctx
+                await console_thread.edit(name=start_time, archived=True, locked=True)
                 await ctx.response.defer(ephemeral=False, invisible=False)
                 print("server is stopping")
         except Exception:
@@ -145,6 +163,7 @@ async def mc_render(ctx: discord.Interaction):
 
 @client.event
 async def on_message(message: discord.Message):
+    global console_thread
     if message.author != client.user:
         if message.channel.id == config.chat_channel_id:
             if len(f"<{message.author.name}> {message.content}") < 800 and len(message.content) > 0:
@@ -153,7 +172,7 @@ async def on_message(message: discord.Message):
                 mcr.disconnect()
             else:
                 await message.add_reaction("💀")
-        if message.channel.id == config.console_channel_id:
+        if console_thread and message.channel.id == console_thread.id:
             if 0 < len(message.content) < 256:
                 with MCRcon(config.server_ip, config.rcon_pass) as mcr:
                     resp = mcr.command(message.content)
@@ -164,17 +183,19 @@ async def on_message(message: discord.Message):
                         if panel is not None:
                             view = await control_panel(start_button_state, stop_button_state)
                             await panel_message.edit(view=view)
+                        await console_thread.edit(name=start_time, archived=True, locked=True)
                         resp = "server is stopping"
                         print("server is stopping")
-                    await message.reply(resp, mention_author=False)
+                    elif resp:
+                        await message.reply(resp, mention_author=False)
                 mcr.disconnect()
             else:
                 await message.add_reaction("💀")
 
-async def console_reader(line):
-    global started, panel, start_button_state, stop_button_state, panel_message, console_output, global_interaction, stop_already_called, nickname
+async def console_reader(line, thread):
+    global started, panel, start_button_state, stop_button_state, panel_message, console_output, global_interaction, stop_already_called, nickname, console_thread
     chat_channel = client.get_channel(config.chat_channel_id)
-    console_channel = client.get_channel(config.console_channel_id)
+    console_channel: discord.TextChannel = thread
     file = io.open(config.console, mode="r", encoding="utf-8")
     line_list = file.readlines()
     while line < len(line_list):
@@ -185,11 +206,11 @@ async def console_reader(line):
                 view = await control_panel(start_button_state, stop_button_state)
                 await panel_message.edit(view=view)
             await console_channel.send(line_list[line])
-            message = await console_channel.fetch_message(console_channel.last_message_id)
-            await message.reply("server is stopping")
+            await console_thread.edit(name=start_time, archived=True, locked=True)
             print("server is stopping") 
         if re.match(r"\[[0-9][0-9]:[0-9][0-9]:[0-9][0-9] INFO\]: Closing Server", line_list[line]):
-            await global_interaction.followup.send("server stopped")
+            if global_interaction:
+                await global_interaction.delete_original_response()
             print("server stopped") 
             stop_already_called = False
             started = False

@@ -28,6 +28,13 @@ console_thread: discord.Thread = None
 start_time = None
 restart = False
 
+@client.check
+async def guild_only(ctx: discord.Interaction):
+    if not ctx.guild:
+        await ctx.response.send_message("this command cannot be used in private messages")
+        raise commands.NoPrivateMessage
+    return True
+
 @client.event
 async def on_ready():
     global panel, start_button_state, stop_button_state, panel_message

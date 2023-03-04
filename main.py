@@ -1,4 +1,5 @@
 import discord
+import discord.utils
 from discord.ui import Button, View
 from discord.ext import commands
 from mcstatus import JavaServer
@@ -62,6 +63,16 @@ async def create_buttons(start_button_state, stop_button_state, restart_button_s
     view.add_item(button_render)
     return view
 
+def permission_check(func):
+    async def wrapper(ctx: discord.Interaction):
+        role = discord.utils.find(lambda r: r.name == config.server_admin_role_name, ctx.message.guild.roles)
+        if role in ctx.user.roles:
+            await func(ctx)
+        else:
+            await ctx.response.send_message("you do not have permission", ephemeral=True)
+    return wrapper
+
+@permission_check
 @client.slash_command(name="start", description="start minecraft server", guild=discord.Object(id=config.guild_id))
 async def server_start(ctx: discord.Interaction):
     global started, panel, start_button_state, stop_button_state, panel_message, console_output, console_thread, start_time, restart_button_state, restart
@@ -105,6 +116,7 @@ async def server_start(ctx: discord.Interaction):
     else:
         await ctx.response.send_message("server is already running", ephemeral=True)
 
+@permission_check
 @client.slash_command(name="stop", description="stop minecraft server", guild=discord.Object(id=config.guild_id))
 async def server_stop(ctx: discord.Interaction):
     global stop_already_called
@@ -122,6 +134,7 @@ async def server_stop(ctx: discord.Interaction):
         except Exception:
             await ctx.response.send_message("server is already stopped", ephemeral=True)
 
+@permission_check
 @client.slash_command(name="restart", description="restart minecraft server", guild=discord.Object(id=config.guild_id))
 async def server_restart(ctx: discord.Interaction):
     if started == True:
